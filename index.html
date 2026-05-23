@@ -366,7 +366,7 @@ const MESES    = ['Enero','Febrero','Marzo','Abril','Mayo','Junio',
 const CATS = {
   ingreso: ['Sueldo / salario','Freelance / honorarios','Consultoría','Arriendo recibido',
             'Transferencia recibida','Bono / comisión','Otro ingreso'],
-  egreso:  ['Alimentación / mercado','Colegio / educación','Luz / electricidad','Agua','Gas',
+  egreso:  ['Alimentación / mercado','Restaurante / delivery','Colegio / educación','Luz / electricidad','Agua','Gas',
             'Internet / telefonía','Gimnasio / deporte','Arriendo / hipoteca',
             'Transporte / gasolina','Salud / farmacia','Ropa / calzado',
             'Entretenimiento','Tarjeta de crédito','Impuestos / SUNAT','Otro egreso']
@@ -804,7 +804,7 @@ function esc(s) {
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────
-document.getElementById('fFecha').value = now.toISOString().split('T')[0];
+document.getElementById('fFecha').value = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
 actualizarMesLabel();
 cargarCats();
 render(); // shows loading state while Firebase connects
