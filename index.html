@@ -144,7 +144,16 @@ header p { font-size: 0.65rem; color: var(--text-dim); margin-top: 0.2rem; lette
 .fbtn { padding: 0.3rem 0.7rem; font-family: 'DM Mono', monospace; font-size: 0.62rem; letter-spacing: 0.08em; text-transform: uppercase; border: 1px solid var(--border); background: transparent; color: var(--text-dim); cursor: pointer; border-radius: 2px; -webkit-tap-highlight-color: transparent; }
 .fbtn.on { border-color: var(--accent); color: var(--accent); }
 
-.search-wrap { margin-bottom: 0.8rem; }
+
+/* CATEGORY FILTER */
+.table-filters-row { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 0.8rem; }
+.cat-filter-wrap select { width: 100%; background: var(--surface2); border: 1px solid var(--border); color: var(--text); font-family: 'DM Mono', monospace; font-size: 0.72rem; padding: 0.48rem 0.8rem; border-radius: 2px; outline: none; cursor: pointer; }
+.cat-filter-wrap select:focus { border-color: var(--accent); }
+.cat-total { font-size: 0.68rem; color: var(--text-dim); letter-spacing: 0.04em; padding: 0.25rem 0.1rem; }
+.cat-total .val-inc { color: var(--income); font-family: 'Fraunces', serif; font-size: 0.88rem; }
+.cat-total .val-exp { color: var(--expense); font-family: 'Fraunces', serif; font-size: 0.88rem; }
+.cat-bar.inc-bar { background: var(--income); }
+.search-wrap { margin-bottom: 0; }
 .search-wrap input { width: 100%; background: var(--surface2); border: 1px solid var(--border); color: var(--text); font-family: 'DM Mono', monospace; font-size: 0.78rem; padding: 0.5rem 0.8rem; border-radius: 2px; outline: none; }
 .search-wrap input:focus { border-color: var(--accent); }
 .search-wrap input::placeholder { color: var(--text-dim); }
@@ -284,7 +293,7 @@ tbody td { padding: 0.65rem 0.7rem; vertical-align: middle; }
     </div>
     <div class="field">
       <label>Monto (S/)</label>
-      <input type="number" id="fMonto" placeholder="0.00" min="0" step="0.01" inputmode="decimal">
+      <input type="text" id="fMonto" placeholder="0.00" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*">
     </div>
     <div class="field">
       <label>Notas (opcional)</label>
@@ -298,6 +307,10 @@ tbody td { padding: 0.65rem 0.7rem; vertical-align: middle; }
       <h3>Top egresos del mes</h3>
       <div id="catsChart"></div>
     </div>
+    <div class="cats-block">
+      <h3>Ingresos del mes</h3>
+      <div id="incChart"></div>
+    </div>
   </div>
 
   <!-- TABLE SIDE -->
@@ -310,8 +323,16 @@ tbody td { padding: 0.65rem 0.7rem; vertical-align: middle; }
         <button class="fbtn" onclick="window.filtrar('egreso',this)">Egresos</button>
       </div>
     </div>
-    <div class="search-wrap">
-      <input type="text" id="searchInput" placeholder="Buscar descripción o categoría..." oninput="window.buscar()">
+    <div class="table-filters-row">
+      <div class="search-wrap">
+        <input type="text" id="searchInput" placeholder="Buscar descripción o categoría..." oninput="window.buscar()">
+      </div>
+      <div class="cat-filter-wrap">
+        <select id="catFilter" onchange="window.filtrarCat(this.value)">
+          <option value="">Todas las categorías</option>
+        </select>
+        <div id="catTotal" class="cat-total" style="display:none"></div>
+      </div>
     </div>
     <div style="overflow-x:auto">
       <table>
@@ -378,6 +399,7 @@ let datos        = [];
 let loading      = true;
 let tipo         = 'ingreso';
 let filtro       = 'todos';
+let catFiltro    = '';
 let pendingDelete= null;
 let searchQuery  = '';
 let sortCol      = 'fecha';
@@ -543,7 +565,7 @@ window.agregar = async function() {
   const fecha = document.getElementById('fFecha').value;
   const desc  = document.getElementById('fDesc').value.trim();
   const cat   = document.getElementById('fCat').value;
-  const monto = parseFloat(document.getElementById('fMonto').value);
+  const monto = parseFloat(document.getElementById('fMonto').value.replace(',', '.'));
   const notas = document.getElementById('fNotas').value.trim();
 
   if (!fecha || !desc || !cat || isNaN(monto) || monto <= 0) {
@@ -629,6 +651,12 @@ window.filtrar = function(f, btn) {
   renderTabla();
 };
 
+window.filtrarCat = function(val) {
+  catFiltro = val;
+  currentPage = 1;
+  renderTabla();
+};
+
 window.buscar = function() {
   searchQuery = document.getElementById('searchInput').value.toLowerCase();
   currentPage = 1;
@@ -643,7 +671,29 @@ window.goPage = function(p) {
 };
 
 // ── Render ─────────────────────────────────────────────────────────────────
-function render() { renderResumen(); renderTabla(); renderCats(); }
+function render() { renderResumen(); renderTabla(); renderCats(); renderIncChart(); }
+
+function renderIncChart() {
+  const totales = {};
+  datosMes().filter(d => d.tipo === 'ingreso')
+    .forEach(d => { totales[d.cat] = (totales[d.cat] || 0) + (+d.monto||0); });
+  const sorted = Object.entries(totales).sort((a,b) => b[1] - a[1]).slice(0, 6);
+  const max    = sorted[0]?.[1] || 1;
+  const wrap   = document.getElementById('incChart');
+  if (!sorted.length) {
+    wrap.innerHTML = '<div style="font-size:0.65rem;color:var(--text-dim);letter-spacing:0.04em">Sin ingresos este mes.</div>';
+    return;
+  }
+  wrap.innerHTML = sorted.map(([cat, val]) => `
+    <div class="cat-row">
+      <div class="cat-row-top">
+        <span class="cat-name">${esc(cat)}</span>
+        <span>${fmt(val)}</span>
+      </div>
+      <div class="cat-bar-bg"><div class="cat-bar inc-bar" style="width:${(val/max*100).toFixed(1)}%"></div></div>
+    </div>
+  `).join('');
+}
 
 function fmt(n) {
   return 'S/ ' + Number(n || 0).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -692,6 +742,7 @@ function getLista() {
     (d.desc||'').toLowerCase().includes(searchQuery) ||
     (d.cat ||'').toLowerCase().includes(searchQuery)
   );
+  if (catFiltro) lista = lista.filter(d => d.cat === catFiltro);
   lista.sort((a,b) => {
     let va = a[sortCol] ?? '', vb = b[sortCol] ?? '';
     if (sortCol === 'monto') { va = +va; vb = +vb; }
@@ -703,7 +754,24 @@ function getLista() {
 }
 
 function renderTabla() {
+  // Populate category dropdown from this month's data
+  const allCats = [...new Set(datosMes().map(d => d.cat).filter(Boolean))].sort();
+  const catSel  = document.getElementById('catFilter');
+  catSel.innerHTML = '<option value="">Todas las categorías</option>' +
+    allCats.map(c => `<option value="${c}" ${c===catFiltro?'selected':''}>${c}</option>`).join('');
+
   const lista      = getLista();
+
+  // Show category total
+  const catTotalEl = document.getElementById('catTotal');
+  if (catFiltro && lista.length) {
+    const sum  = lista.reduce((s,d) => s + (+d.monto||0), 0);
+    const tipo = lista[0]?.tipo || 'egreso';
+    catTotalEl.innerHTML = `Total ${catFiltro}: <span class="val-${tipo==='ingreso'?'inc':'exp'}">${fmt(sum)}</span>`;
+    catTotalEl.style.display = 'block';
+  } else {
+    catTotalEl.style.display = 'none';
+  }
   const total      = lista.length;
   const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
   if (currentPage > totalPages) currentPage = totalPages;
