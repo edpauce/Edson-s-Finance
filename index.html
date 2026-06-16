@@ -181,6 +181,16 @@ tbody td { padding: 0.65rem 0.7rem; vertical-align: middle; }
 .page-btns button.on { border-color: var(--accent); color: var(--accent); }
 .page-btns button:disabled { opacity: 0.3; cursor: default; }
 
+/* VOUCHER */
+.voucher-lbl { display: flex; align-items: center; justify-content: center; gap: 0.5rem; padding: 0.65rem 0.8rem; background: var(--surface2); border: 1px dashed var(--border); color: var(--text-dim); font-family: 'DM Mono', monospace; font-size: 0.72rem; letter-spacing: 0.04em; cursor: pointer; border-radius: 2px; text-align: center; -webkit-tap-highlight-color: transparent; transition: all 0.15s; }
+.voucher-lbl:active { border-color: var(--accent); color: var(--accent); }
+.voucher-lbl.has-file { border-color: var(--accent); color: var(--accent); border-style: solid; }
+.voucher-thumb { width: 100%; max-height: 120px; object-fit: cover; border-radius: 2px; margin-top: 0.5rem; border: 1px solid var(--border); display: block; }
+.voucher-status { font-size: 0.6rem; color: var(--text-dim); margin-top: 0.35rem; letter-spacing: 0.04em; text-align: center; }
+.voucher-status.ok { color: var(--income); }
+.vchr-link { color: var(--accent); font-size: 0.75rem; text-decoration: none; margin-right: 0.3rem; }
+.vchr-link:hover { opacity: 0.7; }
+
 /* TOAST */
 .toast { position: fixed; bottom: 1.2rem; right: 1.2rem; background: var(--surface2); border: 1px solid var(--border); border-left: 3px solid var(--accent); padding: 0.7rem 1rem; font-size: 0.72rem; border-radius: 2px; opacity: 0; transform: translateY(8px); transition: all 0.25s; z-index: 999; pointer-events: none; max-width: 260px; }
 .toast.show { opacity: 1; transform: translateY(0); }
@@ -216,6 +226,8 @@ tbody td { padding: 0.65rem 0.7rem; vertical-align: middle; }
   "messagingSenderId": "...",
   "appId": "..."
 }'></textarea>
+    <p style="font-size:0.6rem;color:var(--text-dim);margin:0.8rem 0 0.35rem;letter-spacing:0.04em">API Key de Gemini (para leer vouchers con IA)</p>
+    <input id="cfgGemini" type="text" spellcheck="false" placeholder="Pega tu Gemini API key aquí" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:'DM Mono',monospace;font-size:0.72rem;padding:0.65rem 0.8rem;border-radius:2px;outline:none;margin-bottom:0.8rem">
     <button class="cfg-btn" onclick="window.saveConfig()">Guardar y conectar →</button>
     <p class="cfg-hint">El API key de Firebase es público por diseño — se protege con Firestore Rules.</p>
   </div>
@@ -299,6 +311,15 @@ tbody td { padding: 0.65rem 0.7rem; vertical-align: middle; }
       <label>Notas (opcional)</label>
       <textarea id="fNotas" placeholder="Tienda, referencia, observación..."></textarea>
     </div>
+    <div class="field">
+      <label>Voucher / foto del ticket</label>
+      <label class="voucher-lbl" id="voucherLbl">
+        <span id="voucherLblTxt">📷 Subir comprobante</span>
+        <input type="file" id="voucherInput" accept="image/*" capture="environment" style="display:none" onchange="window.onVoucherSelected(this)">
+      </label>
+      <img id="voucherThumb" class="voucher-thumb" style="display:none">
+      <div id="voucherStatus" class="voucher-status" style="display:none"></div>
+    </div>
     <button class="btn-add" id="btnAdd" onclick="window.agregar()">+ Registrar</button>
     <button class="btn-sec" onclick="window.exportar()">⬇ Exportar CSV del mes</button>
     <button class="btn-sec" onclick="window.exportarTodo()">⬇ Exportar todo el historial</button>
@@ -377,9 +398,12 @@ import { initializeApp }                          from 'https://www.gstatic.com/
 import { getFirestore, collection, addDoc,
          deleteDoc, doc, onSnapshot,
          query, orderBy, serverTimestamp }        from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+import { getStorage, ref as sRef,
+         uploadBytes, getDownloadURL }            from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js';
 
 // ── Constants ──────────────────────────────────────────────────────────────
-const CFG_KEY  = 'finPR_fbConfig';
+const CFG_KEY     = 'finPR_fbConfig';
+function getGeminiKey() { return localStorage.getItem('finPR_geminiKey') || ''; }
 const MIG_KEY  = 'finPR_migrated';
 const PER_PAGE = 15;
 const MESES    = ['Enero','Febrero','Marzo','Abril','Mayo','Junio',
@@ -395,6 +419,8 @@ const CATS = {
 
 // ── State ──────────────────────────────────────────────────────────────────
 let db           = null;
+let storage      = null;
+let pendingVoucher = null;
 let datos        = [];
 let loading      = true;
 let tipo         = 'ingreso';
@@ -423,6 +449,8 @@ window.saveConfig = function() {
     const cfg = JSON.parse(raw);
     if (!cfg.projectId) throw new Error('Falta projectId');
     localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
+    const gKey = document.getElementById('cfgGemini').value.trim();
+    if (gKey) localStorage.setItem('finPR_geminiKey', gKey);
     document.getElementById('cfgOverlay').style.display = 'none';
     boot(cfg);
   } catch(e) {
@@ -436,6 +464,7 @@ function boot(cfg) {
   try {
     const app = initializeApp(cfg);
     db = getFirestore(app);
+    storage = getStorage(app);
 
     const q = query(collection(db, 'movimientos'), orderBy('createdAt', 'desc'));
     onSnapshot(q,
@@ -465,6 +494,91 @@ function setSyncStatus(s) {
   if      (s === 'ok')         { dot.className = 'sync-dot ok';  txt.textContent = 'sincronizado'; }
   else if (s === 'err')        { dot.className = 'sync-dot err'; txt.textContent = 'sin conexión'; }
   else                         { dot.className = 'sync-dot';     txt.textContent = 'conectando...'; }
+}
+
+// ── Voucher: Gemini OCR ────────────────────────────────────────────────────
+async function parseVoucherGemini(file) {
+  const base64 = await new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = e => res(e.target.result.split(',')[1]);
+    r.onerror = rej;
+    r.readAsDataURL(file);
+  });
+  const resp = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${getGeminiKey()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [
+          { text: 'Lee este voucher/boleta de compra peruana. Extrae: fecha (formato YYYY-MM-DD, si no hay año usa 2026), monto total pagado en soles (solo el numero sin simbolo), nombre del negocio o tienda. Responde SOLO con JSON valido sin markdown: {"fecha":"YYYY-MM-DD","monto":0.00,"tienda":"nombre"}' },
+          { inline_data: { mime_type: file.type || 'image/jpeg', data: base64 } }
+        ]}],
+        generationConfig: { temperature: 0 }
+      })
+    }
+  );
+  const json = await resp.json();
+  const text = json.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+  return JSON.parse(text.replace(/```json\n?|\n?```/g, '').trim());
+}
+
+// ── Voucher: Firebase Storage upload ───────────────────────────────────────
+async function uploadVoucher(file) {
+  if (!storage) return '';
+  const ext  = (file.name || 'jpg').split('.').pop();
+  const path = `vouchers/${Date.now()}.${ext}`;
+  const ref  = sRef(storage, path);
+  await uploadBytes(ref, file);
+  return await getDownloadURL(ref);
+}
+
+// ── Voucher: on file selected ──────────────────────────────────────────────
+window.onVoucherSelected = async function(input) {
+  const file = input.files[0];
+  if (!file) return;
+  pendingVoucher = file;
+  if (!getGeminiKey()) {
+    const k = prompt('Ingresa tu Gemini API key para activar el lector de tickets:');
+    if (k) localStorage.setItem('finPR_geminiKey', k.trim());
+  }
+
+  const lbl    = document.getElementById('voucherLbl');
+  const thumb  = document.getElementById('voucherThumb');
+  const status = document.getElementById('voucherStatus');
+
+  lbl.classList.add('has-file');
+  document.getElementById('voucherLblTxt').textContent = '📷 ' + file.name;
+
+  // show thumbnail
+  const objUrl = URL.createObjectURL(file);
+  thumb.src = objUrl;
+  thumb.style.display = 'block';
+
+  status.textContent = 'Analizando ticket con IA...';
+  status.className   = 'voucher-status';
+  status.style.display = 'block';
+
+  try {
+    const data = await parseVoucherGemini(file);
+    if (data.monto)  document.getElementById('fMonto').value = data.monto;
+    if (data.tienda) document.getElementById('fDesc').value  = data.tienda;
+    if (data.fecha)  document.getElementById('fFecha').value = data.fecha;
+    status.textContent = '✓ Datos extraídos: ' + (data.tienda || '') + ' — S/ ' + (data.monto || '');
+    status.className   = 'voucher-status ok';
+  } catch(e) {
+    status.textContent = 'No se pudo leer el ticket — completa los datos manualmente';
+    status.className   = 'voucher-status';
+  }
+};
+
+function resetVoucher() {
+  pendingVoucher = null;
+  document.getElementById('voucherInput').value   = '';
+  document.getElementById('voucherThumb').style.display  = 'none';
+  document.getElementById('voucherStatus').style.display = 'none';
+  document.getElementById('voucherLblTxt').textContent   = '📷 Subir comprobante';
+  document.getElementById('voucherLbl').classList.remove('has-file');
 }
 
 // ── Migration from localStorage ────────────────────────────────────────────
@@ -578,14 +692,21 @@ window.agregar = async function() {
   btn.textContent = 'Guardando...';
 
   try {
+    let voucherUrl = '';
+    if (pendingVoucher) {
+      btn.textContent = 'Subiendo imagen...';
+      try { voucherUrl = await uploadVoucher(pendingVoucher); } catch(e) { console.error('voucher upload:', e); }
+    }
+
     await addDoc(collection(db, 'movimientos'), {
-      tipo, fecha, desc, cat, monto, notas,
+      tipo, fecha, desc, cat, monto, notas, voucherUrl,
       createdAt: serverTimestamp()
     });
     document.getElementById('fDesc').value  = '';
     document.getElementById('fMonto').value = '';
     document.getElementById('fNotas').value = '';
     document.getElementById('fCat').value   = '';
+    resetVoucher();
 
     // jump to the month of the recorded entry
     const [fy, fm] = fecha.split('-').map(Number);
@@ -794,7 +915,7 @@ function renderTabla() {
         <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(d.desc||'')}">${esc(d.desc||'')}</td>
         <td style="color:var(--neutral);font-size:0.7rem;white-space:nowrap">${esc(d.cat||'')}</td>
         <td class="acell ${d.tipo === 'ingreso' ? 'inc' : 'exp'}">${d.tipo === 'ingreso' ? '+' : '-'}${fmt(d.monto)}</td>
-        <td style="color:var(--text-dim);font-size:0.7rem;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.notas||'') || '—'}</td>
+        <td style="color:var(--text-dim);font-size:0.7rem;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.voucherUrl ? `<a href="${d.voucherUrl}" target="_blank" class="vchr-link" title="Ver voucher">🧾</a>` : ''}${esc(d.notas||'') || '—'}</td>
         <td><button class="delbtn" onclick="window.eliminar('${d.id}','${esc(d.desc||'')}',${+d.monto||0})">✕</button></td>
       </tr>`;
     }).join('');
