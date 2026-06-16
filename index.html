@@ -513,22 +513,47 @@ async function parseVoucherGemini(file) {
     r.readAsDataURL(file);
   });
   const resp = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${getGeminiKey()}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${getGeminiKey()}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [
-          { text: 'Lee este voucher/boleta de compra peruana. Extrae: fecha (formato YYYY-MM-DD, si no hay año usa 2026), monto total pagado en soles (solo el numero sin simbolo), nombre del negocio o tienda. Responde SOLO con JSON valido sin markdown: {"fecha":"YYYY-MM-DD","monto":0.00,"tienda":"nombre"}' },
+          { text: 'Lee este voucher/boleta/factura de compra peruana. Extrae el TOTAL PAGADO (busca "TOTAL A PAGAR" o "IMPORTE TOTAL", no el subtotal), la fecha de emisión en formato estricto YYYY-MM-DD (ejemplo 2026-06-14), y el nombre del negocio. Si no ves el año en la fecha usa 2026.' },
           { inline_data: { mime_type: file.type || 'image/jpeg', data: base64 } }
         ]}],
-        generationConfig: { temperature: 0 }
+        generationConfig: {
+          temperature: 0,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: 'OBJECT',
+            properties: {
+              fecha:  { type: 'STRING' },
+              monto:  { type: 'NUMBER' },
+              tienda: { type: 'STRING' }
+            },
+            required: ['fecha', 'monto', 'tienda']
+          }
+        }
       })
     }
   );
   const json = await resp.json();
   const text = json.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
   return JSON.parse(text.replace(/```json\n?|\n?```/g, '').trim());
+}
+
+// Convierte DD/MM/YYYY (o variantes) a YYYY-MM-DD; si ya viene bien la deja igual
+function normalizarFecha(f) {
+  if (!f) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(f)) return f;
+  const m = f.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  if (m) {
+    let [, d, mo, y] = m;
+    if (y.length === 2) y = '20' + y;
+    return `${y}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`;
+  }
+  return f;
 }
 
 // ── Voucher: comprimir a base64 (sin Storage) ──────────────────────────────
@@ -598,7 +623,7 @@ window.onVoucherSelected = async function(input) {
     const data = await parseVoucherGemini(file);
     if (data.monto)  document.getElementById('fMonto').value = data.monto;
     if (data.tienda) document.getElementById('fDesc').value  = data.tienda;
-    if (data.fecha)  document.getElementById('fFecha').value = data.fecha;
+    if (data.fecha)  document.getElementById('fFecha').value = normalizarFecha(data.fecha);
     status.textContent = '✓ Datos extraídos: ' + (data.tienda || '') + ' — S/ ' + (data.monto || '');
     status.className   = 'voucher-status ok';
   } catch(e) {
