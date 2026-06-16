@@ -188,8 +188,12 @@ tbody td { padding: 0.65rem 0.7rem; vertical-align: middle; }
 .voucher-thumb { width: 100%; max-height: 120px; object-fit: cover; border-radius: 2px; margin-top: 0.5rem; border: 1px solid var(--border); display: block; }
 .voucher-status { font-size: 0.6rem; color: var(--text-dim); margin-top: 0.35rem; letter-spacing: 0.04em; text-align: center; }
 .voucher-status.ok { color: var(--income); }
-.vchr-link { color: var(--accent); font-size: 0.75rem; text-decoration: none; margin-right: 0.3rem; }
+.vchr-link { color: var(--accent); font-size: 0.75rem; text-decoration: none; margin-right: 0.3rem; cursor: pointer; }
 .vchr-link:hover { opacity: 0.7; }
+.voucher-view-box { background: var(--surface); border: 1px solid var(--border); border-top: 2px solid var(--accent); padding: 1rem; border-radius: 2px; max-width: 92vw; max-height: 90vh; display: flex; flex-direction: column; gap: 0.7rem; }
+.voucher-view-close { align-self: flex-end; background: transparent; border: 1px solid var(--border); color: var(--text-dim); font-family: 'DM Mono', monospace; font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase; padding: 0.4rem 0.8rem; border-radius: 2px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.voucher-view-close:active { border-color: var(--accent); color: var(--accent); }
+.voucher-view-img { max-width: 100%; max-height: 78vh; object-fit: contain; border-radius: 2px; }
 
 /* TOAST */
 .toast { position: fixed; bottom: 1.2rem; right: 1.2rem; background: var(--surface2); border: 1px solid var(--border); border-left: 3px solid var(--accent); padding: 0.7rem 1rem; font-size: 0.72rem; border-radius: 2px; opacity: 0; transform: translateY(8px); transition: all 0.25s; z-index: 999; pointer-events: none; max-width: 260px; }
@@ -378,6 +382,14 @@ tbody td { padding: 0.65rem 0.7rem; vertical-align: middle; }
   </div>
 </div>
 
+<!-- ── VOUCHER VIEWER ─────────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="voucherViewOverlay" onclick="if(event.target===this)window.cerrarVoucher()">
+  <div class="voucher-view-box">
+    <button class="voucher-view-close" onclick="window.cerrarVoucher()">✕ Cerrar</button>
+    <img id="voucherViewImg" class="voucher-view-img" alt="Voucher">
+  </div>
+</div>
+
 <!-- ── TOAST ──────────────────────────────────────────────────────────────── -->
 <div class="toast" id="toast"></div>
 
@@ -398,8 +410,6 @@ import { initializeApp }                          from 'https://www.gstatic.com/
 import { getFirestore, collection, addDoc,
          deleteDoc, doc, onSnapshot,
          query, orderBy, serverTimestamp }        from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
-import { getStorage, ref as sRef,
-         uploadBytes, getDownloadURL }            from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const CFG_KEY     = 'finPR_fbConfig';
@@ -419,7 +429,6 @@ const CATS = {
 
 // ── State ──────────────────────────────────────────────────────────────────
 let db           = null;
-let storage      = null;
 let pendingVoucher = null;
 let datos        = [];
 let loading      = true;
@@ -464,7 +473,6 @@ function boot(cfg) {
   try {
     const app = initializeApp(cfg);
     db = getFirestore(app);
-    storage = getStorage(app);
 
     const q = query(collection(db, 'movimientos'), orderBy('createdAt', 'desc'));
     onSnapshot(q,
@@ -523,14 +531,41 @@ async function parseVoucherGemini(file) {
   return JSON.parse(text.replace(/```json\n?|\n?```/g, '').trim());
 }
 
-// ── Voucher: Firebase Storage upload ───────────────────────────────────────
-async function uploadVoucher(file) {
-  if (!storage) return '';
-  const ext  = (file.name || 'jpg').split('.').pop();
-  const path = `vouchers/${Date.now()}.${ext}`;
-  const ref  = sRef(storage, path);
-  await uploadBytes(ref, file);
-  return await getDownloadURL(ref);
+// ── Voucher: comprimir a base64 (sin Storage) ──────────────────────────────
+function loadImg(file) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload  = () => { URL.revokeObjectURL(url); res(img); };
+    img.onerror = rej;
+    img.src = url;
+  });
+}
+
+function drawToDataUrl(img, maxDim, quality) {
+  let { width, height } = img;
+  if (width >= height && width > maxDim)      { height = Math.round(height * maxDim / width); width = maxDim; }
+  else if (height > width && height > maxDim) { width  = Math.round(width  * maxDim / height); height = maxDim; }
+  const canvas = document.createElement('canvas');
+  canvas.width = width; canvas.height = height;
+  canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+  return canvas.toDataURL('image/jpeg', quality);
+}
+
+// Comprime hasta que el data URL pese menos de maxBytes (Firestore: tope 1 MiB por doc)
+async function compressVoucher(file, maxBytes = 700000) {
+  const img = await loadImg(file);
+  let maxDim = 1280, quality = 0.72;
+  let dataUrl = drawToDataUrl(img, maxDim, quality);
+  while (dataUrl.length > maxBytes && quality > 0.3) {
+    quality -= 0.1;
+    dataUrl = drawToDataUrl(img, maxDim, quality);
+  }
+  while (dataUrl.length > maxBytes && maxDim > 600) {
+    maxDim -= 200;
+    dataUrl = drawToDataUrl(img, maxDim, quality);
+  }
+  return dataUrl;
 }
 
 // ── Voucher: on file selected ──────────────────────────────────────────────
@@ -694,8 +729,8 @@ window.agregar = async function() {
   try {
     let voucherUrl = '';
     if (pendingVoucher) {
-      btn.textContent = 'Subiendo imagen...';
-      try { voucherUrl = await uploadVoucher(pendingVoucher); } catch(e) { console.error('voucher upload:', e); }
+      btn.textContent = 'Comprimiendo imagen...';
+      try { voucherUrl = await compressVoucher(pendingVoucher); } catch(e) { console.error('voucher compress:', e); }
     }
 
     await addDoc(collection(db, 'movimientos'), {
@@ -752,6 +787,19 @@ window.confirmarEliminar = async function() {
 document.getElementById('modalOverlay').addEventListener('click', function(e) {
   if (e.target === this) window.cerrarModal();
 });
+
+// ── Voucher viewer ─────────────────────────────────────────────────────────
+window.verVoucher = function(id) {
+  const d = datos.find(x => x.id === id);
+  if (!d || !d.voucherUrl) return;
+  document.getElementById('voucherViewImg').src = d.voucherUrl;
+  document.getElementById('voucherViewOverlay').classList.add('open');
+};
+
+window.cerrarVoucher = function() {
+  document.getElementById('voucherViewOverlay').classList.remove('open');
+  document.getElementById('voucherViewImg').src = '';
+};
 
 // ── Sort / filter / search ─────────────────────────────────────────────────
 window.sortBy = function(col) {
@@ -915,7 +963,7 @@ function renderTabla() {
         <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(d.desc||'')}">${esc(d.desc||'')}</td>
         <td style="color:var(--neutral);font-size:0.7rem;white-space:nowrap">${esc(d.cat||'')}</td>
         <td class="acell ${d.tipo === 'ingreso' ? 'inc' : 'exp'}">${d.tipo === 'ingreso' ? '+' : '-'}${fmt(d.monto)}</td>
-        <td style="color:var(--text-dim);font-size:0.7rem;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.voucherUrl ? `<a href="${d.voucherUrl}" target="_blank" class="vchr-link" title="Ver voucher">🧾</a>` : ''}${esc(d.notas||'') || '—'}</td>
+        <td style="color:var(--text-dim);font-size:0.7rem;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.voucherUrl ? `<a href="#" class="vchr-link" title="Ver voucher" onclick="window.verVoucher('${d.id}');return false;">🧾</a>` : ''}${esc(d.notas||'') || '—'}</td>
         <td><button class="delbtn" onclick="window.eliminar('${d.id}','${esc(d.desc||'')}',${+d.monto||0})">✕</button></td>
       </tr>`;
     }).join('');
