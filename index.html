@@ -208,9 +208,10 @@ tbody td { padding: 0.65rem 0.7rem; vertical-align: middle; }
 .toast.err { border-left-color: var(--expense); }
 
 /* CONFIRM MODAL */
-.modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75); z-index: 200; align-items: center; justify-content: center; }
-.modal-overlay.open { display: flex; }
-.modal { background: var(--surface); border: 1px solid var(--border); border-top: 2px solid var(--expense); padding: 1.5rem; border-radius: 2px; max-width: 300px; width: 90%; }
+.modal-overlay { display: none; position: fixed; inset: 0; background: rgba(14,15,14,0.5); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); z-index: 200; align-items: center; justify-content: center; }
+.modal-overlay.open { display: flex; animation: overlayIn 0.2s ease; }
+.modal-overlay.open .modal, .modal-overlay.open .voucher-view-box { animation: modalIn 0.28s cubic-bezier(0.16,1,0.3,1); }
+.modal { background: var(--surface); border: 1px solid var(--border); border-top: 2px solid var(--expense); padding: 1.5rem; border-radius: 2px; max-width: 300px; width: 90%; box-shadow: 0 12px 40px rgba(0,0,0,0.55); }
 .modal h3 { font-family: 'Fraunces', serif; font-size: 1rem; margin-bottom: 0.6rem; }
 .modal p { font-size: 0.72rem; color: var(--text-dim); margin-bottom: 1.2rem; line-height: 1.6; }
 .modal-btns { display: flex; gap: 0.5rem; }
@@ -218,6 +219,32 @@ tbody td { padding: 0.65rem 0.7rem; vertical-align: middle; }
 .modal-cancel { background: transparent; border: 1px solid var(--border); color: var(--text-dim); }
 .modal-confirm { background: var(--expense); border: 1px solid var(--expense); color: var(--bg); font-weight: 500; }
 .modal-confirm:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ANIMATIONS */
+@keyframes overlayIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modalIn { from { opacity: 0; transform: translateY(12px) scale(0.97); } to { opacity: 1; transform: none; } }
+@keyframes rowIn { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
+@keyframes shimmer { 0% { background-position: -300px 0; } 100% { background-position: 300px 0; } }
+@keyframes barGrow { from { width: 0 !important; } }
+@keyframes donutIn { from { opacity: 0; transform: scale(0.85); } to { opacity: 1; transform: scale(1); } }
+
+tbody tr.row-anim { animation: rowIn 0.34s cubic-bezier(0.16,1,0.3,1) both; }
+
+/* SKELETON */
+.skel { height: 12px; border-radius: 2px; background:#1e211e; background-image: linear-gradient(90deg,#1e211e 0px,#2c302c 90px,#1e211e 180px); background-size: 320px 100%; animation: shimmer 1.25s infinite linear; }
+
+/* DONUT */
+.donut-wrap { display: flex; align-items: center; gap: 0.9rem; }
+.donut { width: 92px; height: 92px; border-radius: 50%; flex-shrink: 0; position: relative; animation: donutIn 0.5s cubic-bezier(0.16,1,0.3,1); }
+.donut::after { content: ''; position: absolute; inset: 28%; border-radius: 50%; background: var(--surface); }
+.donut-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 1; }
+.donut-center small { font-size: 0.5rem; color: var(--text-dim); letter-spacing: 0.08em; text-transform: uppercase; }
+.donut-center b { font-family: 'Fraunces', serif; font-size: 0.82rem; color: var(--text); font-weight: 600; }
+.donut-legend { display: flex; flex-direction: column; gap: 0.32rem; font-size: 0.58rem; min-width: 0; flex: 1; }
+.donut-legend .lg { display: flex; align-items: center; gap: 0.4rem; color: var(--text-dim); white-space: nowrap; overflow: hidden; }
+.donut-legend .dot { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+.donut-legend .lg-name { overflow: hidden; text-overflow: ellipsis; }
+.donut-legend .lg-pct { margin-left: auto; color: var(--neutral); padding-left: 0.4rem; }
 </style>
 </head>
 <body>
@@ -336,7 +363,7 @@ tbody td { padding: 0.65rem 0.7rem; vertical-align: middle; }
     <button class="btn-sec" onclick="window.exportarTodo()">⬇ Exportar todo el historial</button>
 
     <div class="cats-block">
-      <h3>Top egresos del mes</h3>
+      <h3>Distribución de egresos</h3>
       <div id="catsChart"></div>
     </div>
     <div class="cats-block">
@@ -914,26 +941,50 @@ function renderResumen() {
   document.getElementById('sBal').style.color = bal >= 0 ? 'var(--accent)' : 'var(--expense)';
 }
 
+// Paleta semáforo por ranking de gasto: rojo (más alto) → ámbar → verde (más bajo)
+const DONUT_COLORS = ['#f87171','#fb923c','#fbbf24','#b5e853','#4ade80'];
+const DONUT_RESTO  = '#6b7a6b';
+
 function renderCats() {
   const totales = {};
   datosMes().filter(d => d.tipo === 'egreso')
     .forEach(d => { totales[d.cat] = (totales[d.cat] || 0) + (+d.monto||0); });
-  const sorted = Object.entries(totales).sort((a,b) => b[1] - a[1]).slice(0, 6);
-  const max    = sorted[0]?.[1] || 1;
+  const sorted = Object.entries(totales).sort((a,b) => b[1] - a[1]);
   const wrap   = document.getElementById('catsChart');
   if (!sorted.length) {
     wrap.innerHTML = '<div style="font-size:0.65rem;color:var(--text-dim);letter-spacing:0.04em">Sin egresos este mes.</div>';
     return;
   }
-  wrap.innerHTML = sorted.map(([cat, val]) => `
-    <div class="cat-row">
-      <div class="cat-row-top">
-        <span class="cat-name">${esc(cat)}</span>
-        <span>${fmt(val)}</span>
+
+  const total    = sorted.reduce((s,[,v]) => s + v, 0);
+  const top       = sorted.slice(0, 5);
+  const restoVal  = sorted.slice(5).reduce((s,[,v]) => s + v, 0);
+  const segs      = top.map(([cat, val], i) => ({ cat, val, color: DONUT_COLORS[i] }));
+  if (restoVal > 0) segs.push({ cat: 'Resto', val: restoVal, color: DONUT_RESTO });
+
+  let acc = 0;
+  const stops = segs.map(s => {
+    const start = (acc / total * 100).toFixed(2);
+    acc += s.val;
+    const end   = (acc / total * 100).toFixed(2);
+    return `${s.color} ${start}% ${end}%`;
+  }).join(', ');
+
+  const totalTxt = total >= 1000 ? 'S/ ' + (total/1000).toFixed(1) + 'k' : fmt(total);
+  const legend   = segs.map(s => `
+    <div class="lg">
+      <span class="dot" style="background:${s.color}"></span>
+      <span class="lg-name">${esc(s.cat)}</span>
+      <span class="lg-pct">${Math.round(s.val/total*100)}%</span>
+    </div>`).join('');
+
+  wrap.innerHTML = `
+    <div class="donut-wrap">
+      <div class="donut" style="background: conic-gradient(${stops})">
+        <div class="donut-center"><small>total</small><b>${totalTxt}</b></div>
       </div>
-      <div class="cat-bar-bg"><div class="cat-bar" style="width:${(val/max*100).toFixed(1)}%"></div></div>
-    </div>
-  `).join('');
+      <div class="donut-legend">${legend}</div>
+    </div>`;
 }
 
 function getLista() {
@@ -982,14 +1033,17 @@ function renderTabla() {
   const tbody = document.getElementById('tbody');
 
   if (loading) {
-    tbody.innerHTML = `<tr><td colspan="7" class="empty">Sincronizando con la nube...</td></tr>`;
+    const w = ['55%','80%','45%','70%','60%','85%','50%','75%'];
+    tbody.innerHTML = w.map(width => `<tr>
+      <td colspan="7" style="padding:0.65rem 0.7rem"><div class="skel" style="width:${width}"></div></td>
+    </tr>`).join('');
   } else if (!page.length) {
     tbody.innerHTML = `<tr><td colspan="7" class="empty">Sin movimientos en ${MESES[activoM]} ${activoY}.<br>Usa las flechas del header para navegar entre meses.</td></tr>`;
   } else {
-    tbody.innerHTML = page.map(d => {
+    tbody.innerHTML = page.map((d, i) => {
       const [y,m,dia] = (d.fecha||'----').split('-');
       // Firestore IDs are alphanumeric — safe for attribute
-      return `<tr>
+      return `<tr class="row-anim" style="animation-delay:${(i*0.03).toFixed(2)}s">
         <td style="color:var(--text-dim);white-space:nowrap">${dia}/${m}/${y}</td>
         <td><span class="badge ${d.tipo === 'ingreso' ? 'inc' : 'exp'}">${d.tipo === 'ingreso' ? '▲ Ing' : '▼ Egr'}</span></td>
         <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(d.desc||'')}">${esc(d.desc||'')}</td>
