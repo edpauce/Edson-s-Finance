@@ -162,6 +162,8 @@ header p { font-size: 0.65rem; color: var(--text-dim); margin-top: 0.2rem; lette
 .cat-total .val-inc { color: var(--income); font-family: 'Fraunces', serif; font-size: 0.88rem; }
 .cat-total .val-exp { color: var(--expense); font-family: 'Fraunces', serif; font-size: 0.88rem; }
 .cat-bar.inc-bar { background: var(--income); }
+.cat-bar.grp-bar { background: var(--neutral); }
+.grp-total { font-size: 0.6rem; color: var(--text-dim); letter-spacing: 0.04em; margin-bottom: 0.7rem; }
 .search-wrap { margin-bottom: 0; }
 .search-wrap input { width: 100%; background: var(--surface2); border: 1px solid var(--border); color: var(--text); font-family: 'DM Mono', monospace; font-size: 0.78rem; padding: 0.5rem 0.8rem; border-radius: 2px; outline: none; }
 .search-wrap input:focus { border-color: var(--accent); }
@@ -380,6 +382,10 @@ tbody tr.row-anim { animation: rowIn 0.34s cubic-bezier(0.16,1,0.3,1) both; }
     <div class="cats-block">
       <h3>Distribución de egresos</h3>
       <div id="catsChart"></div>
+    </div>
+    <div class="cats-block">
+      <h3>Detalle por grupo (recibos del mes)</h3>
+      <div id="gruposChart"></div>
     </div>
     <div class="cats-block">
       <h3>Ingresos del mes</h3>
@@ -949,7 +955,34 @@ window.goPage = function(p) {
 };
 
 // ── Render ─────────────────────────────────────────────────────────────────
-function render() { renderResumen(); renderTabla(); renderCats(); renderIncChart(); renderFondo(); }
+function render() { renderResumen(); renderTabla(); renderCats(); renderGrupos(); renderIncChart(); renderFondo(); }
+
+// ── Detalle por grupo de producto (items de los recibos del mes activo) ─────
+function renderGrupos() {
+  const wrap = document.getElementById('gruposChart');
+  if (!wrap) return;
+  const totales = {};
+  datosMes().filter(d => d.tipo === 'egreso' && Array.isArray(d.items))
+    .forEach(d => d.items.forEach(it => {
+      const g = GRUPOS.includes(it.grupo) ? it.grupo : 'Otros';
+      totales[g] = (totales[g] || 0) + (+it.precio || 0);
+    }));
+  const sorted = Object.entries(totales).sort((a, b) => b[1] - a[1]);
+  if (!sorted.length) {
+    wrap.innerHTML = '<div style="font-size:0.65rem;color:var(--text-dim);letter-spacing:0.04em">Sube recibos para ver el desglose por grupo de producto.</div>';
+    return;
+  }
+  const max   = sorted[0][1] || 1;
+  const total = sorted.reduce((s, [, v]) => s + v, 0);
+  wrap.innerHTML = `<div class="grp-total">Total clasificado: ${fmt(total)}</div>` + sorted.map(([g, val]) => `
+    <div class="cat-row">
+      <div class="cat-row-top">
+        <span class="cat-name">${esc(g)}</span>
+        <span>${fmt(val)}</span>
+      </div>
+      <div class="cat-bar-bg"><div class="cat-bar grp-bar" style="width:${(val/max*100).toFixed(1)}%"></div></div>
+    </div>`).join('');
+}
 
 // ── Fondo mensual a separar (gastos irregulares por grupo de producto) ──────
 // Recorre TODOS los meses con recibos; un grupo es "irregular" si no aparece
