@@ -247,6 +247,19 @@ tbody tr.row-anim { animation: rowIn 0.34s cubic-bezier(0.16,1,0.3,1) both; }
 .donut-legend .dot { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
 .donut-legend .lg-name { overflow: hidden; text-overflow: ellipsis; }
 .donut-legend .lg-pct { margin-left: auto; color: var(--neutral); padding-left: 0.4rem; }
+
+/* FONDO */
+.fondo-empty { font-size: 0.65rem; color: var(--text-dim); letter-spacing: 0.04em; line-height: 1.6; }
+.fondo-empty b { color: var(--neutral); }
+.fondo-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 0.5rem; padding-bottom: 0.7rem; margin-bottom: 0.7rem; border-bottom: 1px solid var(--border); }
+.fondo-head small { display: block; font-size: 0.55rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-dim); margin-bottom: 0.2rem; }
+.fondo-head b { font-family: 'Fraunces', serif; font-size: 1.25rem; font-weight: 600; color: var(--accent); line-height: 1; }
+.fondo-sub { font-size: 0.55rem; color: var(--text-dim); letter-spacing: 0.04em; white-space: nowrap; }
+.fondo-list { display: flex; flex-direction: column; gap: 0.45rem; }
+.fondo-row { display: flex; align-items: center; gap: 0.5rem; font-size: 0.62rem; }
+.fondo-name { color: var(--neutral); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.fondo-freq { color: var(--text-dim); font-size: 0.55rem; white-space: nowrap; }
+.fondo-amt { font-family: 'Fraunces', serif; font-size: 0.78rem; color: var(--expense); white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -372,6 +385,10 @@ tbody tr.row-anim { animation: rowIn 0.34s cubic-bezier(0.16,1,0.3,1) both; }
       <h3>Ingresos del mes</h3>
       <div id="incChart"></div>
     </div>
+    <div class="cats-block">
+      <h3>Fondo mensual a separar</h3>
+      <div id="fondoChart"></div>
+    </div>
   </div>
 
   <!-- TABLE SIDE -->
@@ -463,9 +480,16 @@ const CATS = {
             'Entretenimiento','Tarjeta de crédito','Impuestos / SUNAT','Otro egreso']
 };
 
+// Grupos de producto para clasificar los items de cada recibo (análisis de fondo)
+const GRUPOS = ['Lácteos y huevos','Carnes y pescados','Frutas y verduras',
+                'Abarrotes / despensa','Panadería','Snacks y dulces','Bebidas',
+                'Limpieza del hogar','Cuidado personal','Bebé','Mascotas',
+                'Hogar y bazar','Salud / farmacia','Otros'];
+
 // ── State ──────────────────────────────────────────────────────────────────
 let db           = null;
 let pendingVoucher = null;
+let pendingItems = [];
 let datos        = [];
 let loading      = true;
 let tipo         = 'ingreso';
@@ -555,7 +579,11 @@ async function parseVoucherGemini(file) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [
-          { text: 'Lee este voucher/boleta/factura de compra peruana. Extrae el TOTAL PAGADO (busca "TOTAL A PAGAR" o "IMPORTE TOTAL", no el subtotal), la fecha de emisión en formato estricto YYYY-MM-DD (ejemplo 2026-06-14), y el nombre del negocio. Si no ves el año en la fecha usa 2026.' },
+          { text: `Lee este voucher/boleta/factura de compra peruana y extrae:
+1. El TOTAL PAGADO (busca "TOTAL A PAGAR" o "IMPORTE TOTAL", NO el subtotal).
+2. La fecha de emisión en formato estricto YYYY-MM-DD (si no ves el año usa 2026).
+3. El nombre del negocio.
+4. La lista de productos comprados (items). Para cada producto extrae su nombre tal como aparece, su precio (número en soles), y clasifícalo en UNO de estos grupos EXACTOS: ${GRUPOS.join(', ')}. Si un producto no encaja en ninguno, usa "Otros". IGNORA líneas que no sean productos (descuentos, subtotales, IGV, total, vuelto, medios de pago).` },
           { inline_data: { mime_type: file.type || 'image/jpeg', data: base64 } }
         ]}],
         generationConfig: {
@@ -566,7 +594,19 @@ async function parseVoucherGemini(file) {
             properties: {
               fecha:  { type: 'STRING' },
               monto:  { type: 'NUMBER' },
-              tienda: { type: 'STRING' }
+              tienda: { type: 'STRING' },
+              items:  {
+                type: 'ARRAY',
+                items: {
+                  type: 'OBJECT',
+                  properties: {
+                    nombre: { type: 'STRING' },
+                    precio: { type: 'NUMBER' },
+                    grupo:  { type: 'STRING', enum: GRUPOS }
+                  },
+                  required: ['nombre', 'precio', 'grupo']
+                }
+              }
             },
             required: ['fecha', 'monto', 'tienda']
           }
@@ -660,9 +700,15 @@ window.onVoucherSelected = async function(input) {
     if (data.monto)  document.getElementById('fMonto').value = data.monto;
     if (data.tienda) document.getElementById('fDesc').value  = data.tienda;
     if (data.fecha)  document.getElementById('fFecha').value = normalizarFecha(data.fecha);
-    status.textContent = '✓ Datos extraídos: ' + (data.tienda || '') + ' — S/ ' + (data.monto || '');
+    pendingItems = Array.isArray(data.items)
+      ? data.items.filter(it => it && it.nombre && (+it.precio > 0))
+                  .map(it => ({ nombre: String(it.nombre), precio: +it.precio, grupo: GRUPOS.includes(it.grupo) ? it.grupo : 'Otros' }))
+      : [];
+    const itemsTxt = pendingItems.length ? ` · ${pendingItems.length} items clasificados` : '';
+    status.textContent = '✓ ' + (data.tienda || '') + ' — S/ ' + (data.monto || '') + itemsTxt;
     status.className   = 'voucher-status ok';
   } catch(e) {
+    pendingItems = [];
     status.textContent = 'No se pudo leer el ticket — completa los datos manualmente';
     status.className   = 'voucher-status';
   }
@@ -670,6 +716,7 @@ window.onVoucherSelected = async function(input) {
 
 function resetVoucher() {
   pendingVoucher = null;
+  pendingItems = [];
   document.getElementById('voucherInput').value   = '';
   document.getElementById('voucherThumb').style.display  = 'none';
   document.getElementById('voucherStatus').style.display = 'none';
@@ -794,8 +841,9 @@ window.agregar = async function() {
       try { voucherUrl = await compressVoucher(pendingVoucher); } catch(e) { console.error('voucher compress:', e); }
     }
 
+    const items = (tipo === 'egreso' && pendingItems.length) ? pendingItems : [];
     await addDoc(collection(db, 'movimientos'), {
-      tipo, fecha, desc, cat, monto, notas, voucherUrl,
+      tipo, fecha, desc, cat, monto, notas, voucherUrl, items,
       createdAt: serverTimestamp()
     });
     document.getElementById('fDesc').value  = '';
@@ -901,7 +949,76 @@ window.goPage = function(p) {
 };
 
 // ── Render ─────────────────────────────────────────────────────────────────
-function render() { renderResumen(); renderTabla(); renderCats(); renderIncChart(); }
+function render() { renderResumen(); renderTabla(); renderCats(); renderIncChart(); renderFondo(); }
+
+// ── Fondo mensual a separar (gastos irregulares por grupo de producto) ──────
+// Recorre TODOS los meses con recibos; un grupo es "irregular" si no aparece
+// en la mayoría de los meses. El fondo es su gasto total mensualizado.
+function renderFondo() {
+  const wrap = document.getElementById('fondoChart');
+  if (!wrap) return;
+
+  // grupo -> { mesKey -> monto }
+  const porGrupo = {};
+  const meses    = new Set();
+  datos.filter(d => d.tipo === 'egreso' && Array.isArray(d.items) && d.items.length)
+    .forEach(d => {
+      const mk = (d.fecha || '').slice(0, 7);            // YYYY-MM
+      if (!/^\d{4}-\d{2}$/.test(mk)) return;
+      meses.add(mk);
+      d.items.forEach(it => {
+        const g = GRUPOS.includes(it.grupo) ? it.grupo : 'Otros';
+        const p = +it.precio || 0;
+        if (p <= 0) return;
+        (porGrupo[g] = porGrupo[g] || {});
+        porGrupo[g][mk] = (porGrupo[g][mk] || 0) + p;
+      });
+    });
+
+  const nMeses = meses.size;
+
+  if (!nMeses || !Object.keys(porGrupo).length) {
+    wrap.innerHTML = '<div class="fondo-empty">Sube recibos para detectar tus gastos irregulares y cuánto separar al mes.</div>';
+    return;
+  }
+  if (nMeses < 2) {
+    wrap.innerHTML = `<div class="fondo-empty">Llevas <b>1 mes</b> con recibos. Necesito al menos 2 meses para distinguir lo recurrente de lo esporádico.</div>`;
+    return;
+  }
+
+  // Métricas por grupo
+  const grupos = Object.entries(porGrupo).map(([g, m]) => {
+    const activos = Object.keys(m).length;
+    const total   = Object.values(m).reduce((s, v) => s + v, 0);
+    return { grupo: g, freq: activos / nMeses, prom: total / nMeses, total };
+  });
+
+  // Irregular = aparece en menos del 60% de los meses observados
+  const irreg = grupos.filter(x => x.freq < 0.6).sort((a, b) => b.prom - a.prom);
+  const fondo = irreg.reduce((s, x) => s + x.prom, 0);
+
+  if (!irreg.length) {
+    wrap.innerHTML = `<div class="fondo-empty">Tus gastos por grupo son estables (${nMeses} meses). No hay irregulares que provisionar.</div>`;
+    return;
+  }
+
+  const filas = irreg.map(x => `
+    <div class="fondo-row">
+      <span class="fondo-name">${esc(x.grupo)}</span>
+      <span class="fondo-freq">${Math.round(x.freq * 100)}% meses</span>
+      <span class="fondo-amt">${fmt(x.prom)}</span>
+    </div>`).join('');
+
+  wrap.innerHTML = `
+    <div class="fondo-head">
+      <div>
+        <small>Separar al mes</small>
+        <b>${fmt(fondo)}</b>
+      </div>
+      <span class="fondo-sub">${irreg.length} grupos · ${nMeses} meses</span>
+    </div>
+    <div class="fondo-list">${filas}</div>`;
+}
 
 function renderIncChart() {
   const totales = {};
