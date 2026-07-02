@@ -229,7 +229,6 @@ tbody td { padding: 0.65rem 0.7rem; vertical-align: middle; }
 @keyframes modalIn { from { opacity: 0; transform: translateY(12px) scale(0.97); } to { opacity: 1; transform: none; } }
 @keyframes rowIn { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
 @keyframes shimmer { 0% { background-position: -300px 0; } 100% { background-position: 300px 0; } }
-@keyframes barGrow { from { width: 0 !important; } }
 @keyframes donutIn { from { opacity: 0; transform: scale(0.85); } to { opacity: 1; transform: scale(1); } }
 
 tbody tr.row-anim { animation: rowIn 0.34s cubic-bezier(0.16,1,0.3,1) both; }
@@ -285,6 +284,21 @@ tbody tr.row-anim { animation: rowIn 0.34s cubic-bezier(0.16,1,0.3,1) both; }
     <input id="cfgGemini" type="text" spellcheck="false" placeholder="Pega tu Gemini API key aquí" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:'DM Mono',monospace;font-size:0.72rem;padding:0.65rem 0.8rem;border-radius:2px;outline:none;margin-bottom:0.8rem">
     <button class="cfg-btn" onclick="window.saveConfig()">Guardar y conectar →</button>
     <p class="cfg-hint">El API key de Firebase es público por diseño — se protege con Firestore Rules.</p>
+  </div>
+</div>
+
+<!-- ── AUTH OVERLAY ───────────────────────────────────────────────────────── -->
+<div class="cfg-overlay" id="authOverlay" style="display:none">
+  <div class="cfg-box">
+    <div class="cfg-logo">Finanzas PR</div>
+    <h2>Acceso familiar</h2>
+    <p>Ingresa la contraseña de la familia.<br>Solo la primera vez en este dispositivo.</p>
+    <div class="cfg-err" id="authErr"></div>
+    <input type="password" id="authPass" placeholder="Contraseña" autocomplete="current-password"
+      style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:'DM Mono',monospace;font-size:16px;padding:0.8rem;border-radius:2px;outline:none;margin-bottom:0.8rem"
+      onkeydown="if(event.key==='Enter')window.doLogin()">
+    <button class="cfg-btn" id="authBtn" onclick="window.doLogin()">Entrar →</button>
+    <p class="cfg-hint">Los datos están protegidos — solo la familia puede verlos.</p>
   </div>
 </div>
 
@@ -469,8 +483,12 @@ import { initializeApp }                          from 'https://www.gstatic.com/
 import { getFirestore, collection, addDoc,
          deleteDoc, doc, onSnapshot,
          query, orderBy, serverTimestamp }        from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+import { getAuth, signInWithEmailAndPassword,
+         onAuthStateChanged }                     from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 
 // ── Constants ──────────────────────────────────────────────────────────────
+const APP_VERSION  = 'v2.0';
+const FAMILY_EMAIL = 'familia@finanzaspr.app';
 const CFG_KEY     = 'finPR_fbConfig';
 function getGeminiKey() { return localStorage.getItem('finPR_geminiKey') || ''; }
 const MIG_KEY  = 'finPR_migrated';
@@ -534,39 +552,78 @@ window.saveConfig = function() {
 };
 
 // ── Firebase boot ──────────────────────────────────────────────────────────
+let auth = null;
+let firestoreStarted = false;
+
 function boot(cfg) {
   setSyncStatus('connecting');
   try {
     const app = initializeApp(cfg);
-    db = getFirestore(app);
+    db   = getFirestore(app);
+    auth = getAuth(app);
 
-    const q = query(collection(db, 'movimientos'), orderBy('createdAt', 'desc'));
-    onSnapshot(q,
-      snap => {
-        datos   = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-        loading = false;
-        setSyncStatus('ok');
-        render();
-        checkMigration();
-      },
-      err => {
-        console.error('Firestore:', err);
-        loading = false;
-        setSyncStatus('err');
-        render();
+    onAuthStateChanged(auth, user => {
+      if (user) {
+        document.getElementById('authOverlay').style.display = 'none';
+        startFirestore();
+      } else {
+        setSyncStatus('auth');
+        document.getElementById('authOverlay').style.display = 'flex';
       }
-    );
+    });
   } catch(e) {
     console.error('Firebase init:', e);
     setSyncStatus('err');
   }
 }
 
+window.doLogin = async function() {
+  const pass  = document.getElementById('authPass').value;
+  const errEl = document.getElementById('authErr');
+  const btn   = document.getElementById('authBtn');
+  errEl.textContent = '';
+  if (!pass) { errEl.textContent = '⚠ Ingresa la contraseña'; return; }
+  btn.disabled = true; btn.textContent = 'Verificando...';
+  try {
+    await signInWithEmailAndPassword(auth, FAMILY_EMAIL, pass);
+    // onAuthStateChanged oculta el overlay y arranca Firestore
+  } catch(e) {
+    errEl.textContent = '⚠ Contraseña incorrecta';
+    console.error('auth:', e.code);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Entrar →';
+  }
+};
+
+function startFirestore() {
+  if (firestoreStarted) return;
+  firestoreStarted = true;
+  setSyncStatus('connecting');
+  const q = query(collection(db, 'movimientos'), orderBy('createdAt', 'desc'));
+  onSnapshot(q,
+    snap => {
+      datos   = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      window.__datos = datos; // solo lectura, para depuración/análisis
+      loading = false;
+      setSyncStatus('ok');
+      render();
+      checkMigration();
+    },
+    err => {
+      console.error('Firestore:', err);
+      loading = false;
+      setSyncStatus('err');
+      render();
+    }
+  );
+}
+
 function setSyncStatus(s) {
   const dot = document.getElementById('syncDot');
   const txt = document.getElementById('syncTxt');
-  if      (s === 'ok')         { dot.className = 'sync-dot ok';  txt.textContent = 'sincronizado'; }
+  if      (s === 'ok')         { dot.className = 'sync-dot ok';  txt.textContent = 'sincronizado · ' + APP_VERSION; }
   else if (s === 'err')        { dot.className = 'sync-dot err'; txt.textContent = 'sin conexión'; }
+  else if (s === 'auth')       { dot.className = 'sync-dot';     txt.textContent = 'esperando acceso'; }
   else                         { dot.className = 'sync-dot';     txt.textContent = 'conectando...'; }
 }
 
@@ -835,6 +892,15 @@ window.agregar = async function() {
     toast('⚠ Completa todos los campos obligatorios', true);
     return;
   }
+
+  // Detector de duplicados: mismo tipo, misma fecha, mismo monto
+  const dup = datos.find(d => d.tipo === tipo && d.fecha === fecha && Math.abs((+d.monto) - monto) < 0.005);
+  if (dup && !confirm(`Ya existe un ${tipo} de ${fmt(monto)} el ${fecha} ("${dup.desc}").\n¿Registrar de todos modos?`)) return;
+
+  // Validación de fecha fuera de rango (ej: recibo leído con año/mes equivocado)
+  const fReg = new Date(fecha + 'T12:00:00');
+  const difDias = (new Date() - fReg) / 86400000;
+  if ((difDias > 90 || difDias < -7) && !confirm(`La fecha ${fecha} está fuera del rango habitual.\n¿Es correcta?`)) return;
 
   const btn = document.getElementById('btnAdd');
   btn.disabled = true;
@@ -1235,7 +1301,9 @@ window.exportar = function() {
 
 window.exportarTodo = function() {
   if (!datos.length) { toast('Sin datos para exportar', true); return; }
-  descargarCSV(buildCSV(datos), `finanzas_pr_historial_${now.toISOString().split('T')[0]}.csv`);
+  const h = new Date();
+  const hoyLocal = `${h.getFullYear()}-${String(h.getMonth()+1).padStart(2,'0')}-${String(h.getDate()).padStart(2,'0')}`;
+  descargarCSV(buildCSV(datos), `finanzas_pr_historial_${hoyLocal}.csv`);
   toast('✓ Historial completo exportado');
 };
 
